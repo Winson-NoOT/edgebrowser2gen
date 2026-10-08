@@ -164,11 +164,12 @@ def test_stage_requires_snapshot_choice(tmp_path):
     assert not target.exists()
 
 
-def test_stage_preserves_workspace_and_group_links(tmp_path):
+def test_stage_preserves_workspace_and_group_links(tmp_path, caplog):
     root, _ = profile_fixture(tmp_path)
     target = tmp_path / "staged"
     assert main(["stage", "--edge-user-data", str(root), "--output", str(target),
                  "--allow-cached-snapshot", "--summary-only"]) == 0
+    assert not any("Research" in record.getMessage() for record in caplog.records)
     session = read_mozlz4(target / "zen-sessions.jsonlz4")
     assert session["spaces"][0]["name"] == "Research"
     tab = next(tab for tab in session["tabs"] if not tab.get("pinned"))

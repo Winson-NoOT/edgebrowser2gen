@@ -121,6 +121,7 @@ class SpaceRecord:
     # bookmark-only sources (Arc/Firefox/Safari) behave exactly as before.
     bookmarks: list[TabRecord] | None = None
     bookmark_folders: list[FolderRecord] | None = None
+    zen_uuid: str | None = None  # Stable destination identity for sources with workspace IDs.
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -131,6 +132,7 @@ class SpaceRecord:
             "folders": [f.to_dict() for f in self.folders],
             "icon": self.icon,
             "color": self.color,
+            "zen_uuid": self.zen_uuid,
         }
 
 
@@ -139,11 +141,13 @@ class ExportData:
     """Unified intermediate representation handed to the Zen-side writers."""
     source: str                  # "arc", "chrome", "edge", "brave", "firefox", "safari"
     spaces: list[SpaceRecord] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "source": self.source,
             "spaces": [s.to_dict() for s in self.spaces],
+            "warnings": list(self.warnings),
         }
 
     def to_legacy_dict(self) -> dict[str, Any]:
@@ -160,6 +164,7 @@ class ExportData:
             spaces_out.append({
                 "space_id": s.space_id,
                 "space_name": s.space_name,
+                "zen_uuid": s.zen_uuid,
                 "icon": s.icon,
                 "color": s.color,
                 "total_pinned_tabs": len(s.pinned_tabs),

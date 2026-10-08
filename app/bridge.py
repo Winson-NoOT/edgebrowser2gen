@@ -51,7 +51,8 @@ def _safe(payload: Any) -> Any:
 
 class Bridge:
     def __init__(self) -> None:
-        self.orchestrator = MigrationOrchestrator()
+        from extractors import EdgeExtractor
+        self.orchestrator = MigrationOrchestrator(source=EdgeExtractor())
         self._worker: threading.Thread | None = None
         self._final_state: dict = {"status": "idle"}  # 'idle' | 'running' | 'done' | 'error'
         self._lock = threading.Lock()
@@ -90,6 +91,9 @@ class Bridge:
         same shape as one entry of :meth:`list_sources` so the frontend
         can confirm the switch landed."""
         from extractors import by_name  # type: ignore[import-not-found]
+        with self._lock:
+            if self._worker is not None and self._worker.is_alive():
+                return {"ok": False, "error": "A migration is running."}
         try:
             cls = by_name(name)
         except KeyError:
@@ -110,6 +114,18 @@ class Bridge:
     def current_source(self) -> dict:
         src = self.orchestrator.source
         return {"name": src.name, "displayName": src.display_name}
+
+    def set_source_profile(self, name: str | None) -> dict:
+        with self._lock:
+            if self._worker is not None and self._worker.is_alive():
+                return {"ok": False, "error": "A migration is running."}
+            source = self.orchestrator.source
+            if source.name != "edge":
+                return {"ok": False, "error": "Profile selection is available for Edge."}
+            if name and name not in source.available_profile_names():
+                return {"ok": False, "error": "Edge profile was not found."}
+            source.profile_name = name or None
+        return {"ok": True}
 
     # ----------------------------- window helpers -----------------------------
 
@@ -255,7 +271,12 @@ class Bridge:
     def check_env(self) -> dict:
         try:
             report = self.orchestrator.check_environment()
-            return _safe(env_report_to_dict(report))
+            data = env_report_to_dict(report)
+            source = self.orchestrator.source
+            if source.name == "edge":
+                data["availableSourceProfiles"] = source.available_profile_names()
+                data["selectedSourceProfile"] = source.profile_name
+            return _safe(data)
         except Exception as exc:
             logger.exception("check_env failed")
             return {"error": str(exc), "trace": traceback.format_exc()}
@@ -319,6 +340,11 @@ class Bridge:
 
         try:
             opts = self._parse_options(opts_json)
+            environment = self.orchestrator.check_environment()
+            if environment.source_running or environment.zen_running:
+                return {"ok": False, "error": "Close the source browser and Zen before migrating."}
+            if opts.zen_profile_path.resolve() not in {p.path.resolve() for p in environment.zen_profiles}:
+                return {"ok": False, "error": "Choose a detected Zen browsing profile."}
         except Exception as exc:
             return {"ok": False, "error": f"bad options: {exc}"}
 
@@ -328,11 +354,14 @@ class Bridge:
         def _run() -> None:
             try:
                 # Drain the iterator; events flow into the queue via the bus.
-                for _ in self.orchestrator.migrate(opts):
-                    pass
+                errors = []
+                for event in self.orchestrator.migrate(opts, preserve_progress=True):
+                    if event.get("kind") == "step_error":
+                        errors.append(event.get("detail") or event.get("message", "Migration step failed."))
                 with self._lock:
                     self._final_state = {
-                        "status": "done",
+                        "status": "error" if errors else "done",
+                        **({"error": "Some migration steps failed. " + " ".join(errors)} if errors else {}),
                         "backups": [str(p) for p in self.orchestrator.find_backups(opts.zen_profile_path)],
                         "zenProfilePath": str(opts.zen_profile_path),
                     }
@@ -618,12 +647,13 @@ class Bridge:
             zen_profile_path=zen_profile,
             space_filter=data.get("spaceFilter") or None,
             excluded_spaces=excluded_spaces,
+            excluded_space_ids=[value for value in data.get("excludedSpaceIds", []) if isinstance(value, str)],
             folders_collapsed=bool(data.get("foldersCollapsed", True)),
             include_workspaces=bool(data.get("includeWorkspaces", True)),
             include_pinned_tabs=bool(data.get("includePinnedTabs", True)),
             include_bookmarks=bool(data.get("includeBookmarks", True)),
             include_favicons=bool(data.get("includeFavicons", True)),
-            include_open_tabs=bool(data.get("includeOpenTabs", False)),
+            include_open_tabs=bool(data.get("includeOpenTabs", True)),
             include_history=bool(data.get("includeHistory", False)),
             include_cookies=bool(data.get("includeCookies", False)),
         )

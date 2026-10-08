@@ -27,8 +27,8 @@
         <p class="eyebrow" id="welcome-eyebrow">Browser → Zen</p>
         <h1 class="display">Move your browser, keep your setup.</h1>
         <p class="muted" style="margin-top: var(--space-3); max-width: 520px; line-height: 1.5;">
-          Spaces, pinned tabs, folders, favicons, bookmarks. Optionally history and
-          login state. Done in under a minute.
+          Bring Edge workspaces, tabs and groups into Zen. Review local recovery
+          coverage before importing. Bookmarks and other browser data are also supported.
         </p>
       </div>
       <div class="actions">
@@ -36,9 +36,9 @@
         <button class="btn btn-soft" id="welcome-backup">Backup or restore Zen</button>
       </div>
       <div class="footer">
-        <span id="footer-brand">browser2zen · open source</span>
+        <span id="footer-brand">edgebrowser2gen · open source</span>
         <button class="link-btn" id="open-backups">Manage backups</button>
-        <span>macOS · arm64</span>
+        <span>Edge → Zen</span>
       </div>
     </section>
 
@@ -159,10 +159,12 @@
         <div class="browser-card" id="card-source" data-ok="false">
           <div class="card-head">
             <span class="brand-mark" id="source-mark"></span>
-            <span class="h2" id="source-card-name">Arc</span>
+            <span class="h2" id="source-card-name">Microsoft Edge</span>
             <span class="pill pill-warn" id="source-pill">Detecting…</span>
           </div>
           <div class="subtle muted" id="source-detail">Looking for browser data on disk.</div>
+          <label id="source-profile-label" for="source-profile-select" style="display:none;">Edge profile</label>
+          <select class="profile-select" id="source-profile-select" style="display:none;"></select>
           <div id="source-running-row" style="display:none;">
             <button class="btn btn-soft btn-pill" id="source-quit-btn">Quit browser</button>
           </div>
@@ -177,8 +179,8 @@
           <div class="subtle muted" id="zen-detail">Looking for Zen profiles on disk.</div>
           <select class="profile-select" id="zen-profile-select" style="display:none;"></select>
           <div id="zen-install-row" style="display:none;">
-            <button class="btn btn-primary btn-pill" id="zen-install-btn">Download Zen</button>
-            <span class="subtle dim" style="margin-left: var(--space-3);">Then launch it once and click Recheck.</span>
+            <button class="btn btn-primary btn-pill" id="zen-install-btn">Launch or download Zen</button>
+            <span class="subtle dim" style="margin-left: var(--space-3);">Launch once, quit, then click Recheck.</span>
           </div>
           <div id="zen-running-row" style="display:none;">
             <button class="btn btn-soft btn-pill" id="zen-quit-btn">Quit Zen</button>
@@ -204,6 +206,7 @@
       <p class="muted" style="margin-top: 4px;">Review and choose what to bring over.</p>
 
       <div class="stat-strip" id="stat-strip"></div>
+      <div class="gate" id="preview-warnings" role="status" style="display:none;"></div>
 
       <div class="spaces-list" id="spaces-list"></div>
 
@@ -212,7 +215,7 @@
 
       <div class="actions-row">
         <button class="btn btn-ghost" id="preview-back">Back</button>
-        <button class="btn btn-primary" id="preview-go">Start migration</button>
+        <button class="btn btn-primary" id="preview-go" disabled>Start migration</button>
       </div>
     </section>
 

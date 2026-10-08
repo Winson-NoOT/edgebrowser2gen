@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import sys
 import time
 import traceback
@@ -61,6 +62,7 @@ class SpaceSummary:
     # space card background to match the Arc workspace. ``None`` when the
     # space has no theme set.
     color: tuple[int, int, int] | None = None
+    space_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,7 @@ class PreviewReport:
     favicon_match_estimate: int    # how many URLs Arc has cached icons for
     history_rows_estimate: int
     cookies_estimate: int
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -80,6 +83,7 @@ class MigrationOptions:
     zen_profile_path: Path
     space_filter: str | None = None    # substring filter for power-user CLI
     excluded_spaces: list[str] = field(default_factory=list)  # exact-name set for the Preview-screen checkboxes
+    excluded_space_ids: list[str] = field(default_factory=list)
     folders_collapsed: bool = True
     include_workspaces: bool = True
     include_pinned_tabs: bool = True
@@ -172,6 +176,9 @@ class MigrationOrchestrator:
         # Default source = Arc so existing callers (CLI/Arc-only frontend)
         # don't need to change.
         self.source: BrowserExtractor = source or ArcExtractor()
+        self._preserve_progress = False
+        self._pending_events: list[ProgressEvent] = []
+        self._error_count = 0
 
     # ---- env / preview --------------------------------------------------
 
@@ -211,6 +218,7 @@ class MigrationOrchestrator:
                 folder_count=folder_count,
                 essential_count=essential,
                 color=color_rgb,
+                space_id=s.space_id,
             ))
             # Bookmarks ride their own channel; when a source doesn't set it
             # they fall back to pinned_tabs (matches to_legacy_dict).
@@ -241,6 +249,7 @@ class MigrationOrchestrator:
             favicon_match_estimate=favicon_match_estimate,
             history_rows_estimate=history_rows_estimate,
             cookies_estimate=cookies_estimate,
+            warnings=list(data.warnings),
         )
 
     def _estimate_favicons(self, urls: list[str]) -> int:
@@ -297,20 +306,26 @@ class MigrationOrchestrator:
 
     # ---- migration ------------------------------------------------------
 
-    def migrate(self, opts: MigrationOptions) -> Iterator[ProgressEvent]:
+    def migrate(self, opts: MigrationOptions, *, preserve_progress: bool = False) -> Iterator[ProgressEvent]:
         """Run the full migration. Yields events through the bus.
 
         Designed to be called on a worker thread; the JS bridge polls
         ``self.bus.drain()`` from its own thread.
         """
         self.bus.install()
+        self._preserve_progress = preserve_progress
+        self._pending_events = []
+        self._error_count = 0
         try:
             yield from self._run(opts)
         finally:
             self.bus.uninstall()
+            self._preserve_progress = False
 
     def _emit(self, event: ProgressEvent) -> None:
         self.bus.push(event)
+        if self._preserve_progress:
+            self._pending_events.append(event)
 
     def _start_step(self, step: str) -> None:
         self.bus.set_step(step)
@@ -327,6 +342,7 @@ class MigrationOrchestrator:
         self._emit(ev)
 
     def _error_step(self, step: str, exc: BaseException) -> None:
+        self._error_count += 1
         self._emit({
             "kind": "step_error",
             "step": step,
@@ -359,15 +375,18 @@ class MigrationOrchestrator:
         # exact-name and case-sensitive because that's what the Preview
         # checkboxes send; the substring ``space_filter`` above is the
         # power-user CLI knob and runs first.
+        if opts.excluded_space_ids:
+            excluded_ids = set(opts.excluded_space_ids)
+            export.spaces = [s for s in export.spaces if s.space_id not in excluded_ids]
         if opts.excluded_spaces:
             excluded = set(opts.excluded_spaces)
             export.spaces = [s for s in export.spaces if s.space_name not in excluded]
-            if not export.spaces:
-                self._error_step("extract", RuntimeError(
-                    "All spaces were excluded. Pick at least one space to migrate."
-                ))
-                yield from self._drain_yield()
-                return
+        if not export.spaces:
+            self._error_step("extract", RuntimeError(
+                "All spaces were excluded. Pick at least one space to migrate."
+            ))
+            yield from self._drain_yield()
+            return
 
         # Materialise the dict shape the Zen-side writers consume. Every
         # extractor lowers to this single shape; the writers stay
@@ -383,6 +402,31 @@ class MigrationOrchestrator:
         yield from self._drain_yield()
 
         # 2: containers --------------------------------------------------
+        # Back up all possible destinations before any step changes the profile.
+        try:
+            if not zen_profile.is_dir():
+                raise ValueError("The selected Zen profile directory does not exist.")
+            names = ["zen-sessions.jsonlz4", "sessionstore.jsonlz4", "containers.json", "prefs.js",
+                     "workspace_setup_guide.json", ".browser2zen-migrated",
+                     "sessionstore-backups/recovery.jsonlz4", "sessionstore-backups/recovery.baklz4",
+                     "places.sqlite", "favicons.sqlite", "cookies.sqlite"]
+            files = [zen_profile / name for name in names]
+            files += [zen_profile / (name + suffix) for name in ("places.sqlite", "favicons.sqlite", "cookies.sqlite")
+                      for suffix in ("-wal", "-shm")]
+            for source in files:
+                if source.is_file():
+                    timestamp = int(time.time())
+                    target = source.with_name(f"{source.name}.backup.{timestamp}")
+                    while target.exists():
+                        timestamp += 1
+                        target = source.with_name(f"{source.name}.backup.{timestamp}")
+                    with target.open("xb") as backup, source.open("rb") as original:
+                        shutil.copyfileobj(original, backup)
+        except Exception as exc:
+            self._error_step("containers", RuntimeError(f"Required profile backup failed: {exc}"))
+            yield from self._drain_yield()
+            return
+
         container_mappings: dict = {}
         if opts.include_workspaces:
             self._start_step("containers")
@@ -392,6 +436,8 @@ class MigrationOrchestrator:
                 container_mappings = space_importer.import_spaces_as_containers(
                     export_data, dry_run=False
                 ) or {}
+                if not container_mappings:
+                    raise RuntimeError("Zen container setup failed. Review the log before retrying.")
                 self._done_step("containers", summary={"created_or_reused": len(container_mappings)})
             except Exception as exc:
                 self._error_step("containers", exc)
@@ -417,6 +463,8 @@ class MigrationOrchestrator:
 
                 sess = ZenSessionsImporter(zen_profile, folders_collapsed=opts.folders_collapsed)
                 ok = sess.import_data(payload, container_mappings, dry_run=False)
+                if not ok:
+                    raise RuntimeError("Zen session import failed. Review the log; no success is assumed.")
                 pinned_total = sum(len(sp.get("pinned_tabs") or [])
                                    for sp in payload.get("spaces", []))
                 open_total = sum(len(sp.get("open_tabs") or [])
@@ -434,6 +482,8 @@ class MigrationOrchestrator:
             try:
                 bm = ZenBookmarkImporter(zen_profile)
                 ok = bm.import_bookmarks(export_data, dry_run=False)
+                if not ok:
+                    raise RuntimeError("Zen bookmark import failed. Review the log before retrying.")
                 self._done_step("bookmarks", summary={"ok": bool(ok)})
             except Exception as exc:
                 self._error_step("bookmarks", exc)
@@ -533,6 +583,8 @@ class MigrationOrchestrator:
             yield from self._drain_yield()
 
         # 9: finalize ----------------------------------------------------
+        if self._error_count:
+            return
         self._start_step("finalize")
         try:
             (zen_profile / ".browser2zen-migrated").write_text(
@@ -544,7 +596,11 @@ class MigrationOrchestrator:
         yield from self._drain_yield()
 
     def _drain_yield(self) -> Iterator[ProgressEvent]:
-        yield from self.bus.drain()
+        if self._preserve_progress:
+            pending, self._pending_events = self._pending_events, []
+            yield from pending
+        else:
+            yield from self.bus.drain()
 
     # ---- backups + utility for the Done screen --------------------------
 
@@ -566,6 +622,7 @@ def preview_to_dict(report: PreviewReport) -> dict:
         "spaces": [
             {
                 "name": s.name,
+                "spaceId": s.space_id,
                 "icon": s.icon,
                 "pinnedCount": s.pinned_count,
                 "openCount": s.open_count,
@@ -582,4 +639,5 @@ def preview_to_dict(report: PreviewReport) -> dict:
         "faviconMatchEstimate": report.favicon_match_estimate,
         "historyRowsEstimate": report.history_rows_estimate,
         "cookiesEstimate": report.cookies_estimate,
+        "warnings": list(report.warnings),
     }

@@ -13,6 +13,7 @@ target-version = "py311"
 extend-exclude = [
     "tests/fixtures",
     "build",
+    "src/vendor",
 ]
 
 [tool.ruff.lint]

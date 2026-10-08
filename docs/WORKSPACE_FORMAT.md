@@ -1,9 +1,52 @@
-# Observed Edge workspace cache format
+# Observed Edge workspace storage
+
+The adapter uses read-only snapshots of Edge's local profile storage. It supports
+two observed formats and does not claim complete coverage of every Edge version.
+
+## Modern sync records
+
+The current reader snapshots `<profile>/Sync Data/LevelDB`, checks that source
+file sizes and modification times did not change while copying, and parses the
+temporary copy. `CURRENT` selects the manifest. Version edits identify active
+tables and logs; obsolete files are excluded. Sequence numbers select the newest
+record for each key, honoring LevelDB tombstones and sync metadata pending deletions.
+
+Only the `edge_workspace` and `saved_tab_group` namespaces are used. Their data
+records use an envelope with entity specifics in protobuf field 2. Observed
+envelopes have an omitted/zero version or version one in field 1; both are accepted.
+The shared saved-group envelope is documented in Chromium's
+[SavedTabGroupData schema](https://chromium.googlesource.com/chromium/src/+/HEAD/components/saved_tab_groups/proto/saved_tab_group_data.proto).
+The specifics have a UUID in field 1 and a workspace/group variant in field 4 or
+a tab variant in field 5.
+
+| Entity | Fields used |
+| --- | --- |
+| Workspace | 1: name, 2: ARGB color |
+| Direct workspace tab | 1: parent workspace UUID, 2: UniquePosition, 3: URL, 4: title |
+| Saved tab group | 2: title, 1002: parent workspace UUID, 1003: UniquePosition |
+| Saved group tab | 1: parent group UUID, 2: integer position, 3: URL, 4: title |
+
+Direct tabs and groups are interleaved using the lexicographically ordered
+`custom_compressed_v1` UniquePosition bytes (field 4). Group members use their
+integer position. Independent saved groups without a parent workspace are not
+assigned to an invented workspace. Missing parent references and unsupported
+encodings stop the scan. The observed colors are retained as RGB theme colors.
+
+Modern workspace storage takes precedence for each profile, including an
+authoritative empty store. The reader never resurrects deleted workspaces by
+combining modern records with legacy caches. A local sync database cannot prove
+that every cloud workspace has finished downloading or that its state is current.
+
+The pure Python LevelDB and Snappy readers are vendored under MIT licenses; see
+[provenance](../src/vendor/ORIGIN.md). These forensic readers can expose historical
+data, so the current-record replay above is required before workspace decoding.
+
+## Legacy cache records
 
 The reader is based on local, read-only inspection of Edge caches on Windows.
 It supports `edgeWorkspaceCacheVersion: 1` in the workspace list and `Version: 6`
-in each workspace JSON cache. Newer Edge workspace storage needs a separate
-adapter. A matching cache can be absent, old, or have a different tab count.
+in each workspace JSON cache. A matching cache can be absent, old, or have a
+different tab count. This path is used only when modern workspace storage is absent.
 
 The workspace list is `<profile>/Workspaces/WorkspacesCache`; each tab cache is
 `workspace_cache_<workspace UUID>` in that same directory. `Fluid_Data` is
@@ -29,7 +72,9 @@ Duplicates are retained because two tabs can intentionally show the same URL.
 HTTP, HTTPS, and FTP URLs are allowed; browser-internal URLs are skipped.
 Group IDs are mapped to Zen folder IDs during staging. Pinned state, color,
 sharing, cloud synchronization, and current-cache freshness are not inferred.
-Recovered tabs are imported as ordinary open tabs.
+Recovered tabs are imported as ordinary open tabs. Both readers give each source
+workspace a stable destination UUID. Workspaces with the same name keep separate
+identities; importing the same source workspace again keeps its existing Zen copy.
 
 Tests construct synthetic snapshots. Real browser data is never committed to
 the repository; local validation output belongs in ignored `local/` storage.

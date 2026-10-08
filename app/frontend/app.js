@@ -55,7 +55,7 @@ function setScreen(name) {
 const state = {
   env: null,
   selectedZenProfile: null,
-  source: { name: "arc", displayName: "Arc" },  // current source-browser
+  source: { name: "edge", displayName: "Microsoft Edge" },
   sources: [],                                   // catalogue from list_sources()
   preview: null,
   options: {
@@ -68,6 +68,7 @@ const state = {
     includeHistory: false,
     includeCookies: false,
     excludedSpaces: [],
+    excludedSpaceIds: [],
   },
   steps: [],
   stepLabels: {},
@@ -284,6 +285,7 @@ $("source-next").addEventListener("click", async () => {
     // Best-effort fallback: still navigate; the Detect screen will
     // surface the error.
   } else {
+    state.options.excludedSpaceIds = [];
     state.source = {
       name: result.name, displayName: result.displayName,
       installed: !!result.installed, running: !!result.running,
@@ -303,6 +305,11 @@ async function runDetect() {
 }
 
 function renderDetect(env) {
+  if (env.error) {
+    $("source-detail").textContent = env.error;
+    $("detect-next").disabled = true;
+    return;
+  }
   // Source-browser card (Arc / Chrome / etc.). The DOM ids start with
   // "arc-" for legacy reasons; the field names on env are also "arc*"
   // but they describe whichever source is currently selected.
@@ -314,13 +321,30 @@ function renderDetect(env) {
   const srcMark = $("source-mark");
   if (srcMark) {
     const fresh = makeBrowserMark(srcKey, "small");
-    fresh.id = "arc-mark";
+    fresh.id = "source-mark";
     srcMark.replaceWith(fresh);
   }
   const srcOk = env.sourceInstalled && !env.sourceRunning && env.sourceProfiles.length > 0;
   const srcPill = $("source-pill");
   const srcDetail = $("source-detail");
   const srcCard = $("card-source");
+  const sourceSelect = $("source-profile-select");
+  const profiles = env.availableSourceProfiles || [];
+  sourceSelect.style.display = profiles.length ? "" : "none";
+  $("source-profile-label").style.display = sourceSelect.style.display;
+  clear(sourceSelect);
+  if (profiles.length) {
+    sourceSelect.appendChild(el("option", {value: "", text: "All Edge profiles"}));
+    for (const name of profiles) sourceSelect.appendChild(el("option", {value: name, text: name}));
+    sourceSelect.value = env.selectedSourceProfile || "";
+    sourceSelect.onchange = async () => {
+      $("detect-next").disabled = true;
+      const result = await Bridge().set_source_profile(sourceSelect.value || null);
+      if (!result.ok) { srcDetail.textContent = result.error; return; }
+      state.options.excludedSpaceIds = [];
+      await runDetect();
+    };
+  }
   $("source-running-row").style.display = env.sourceRunning ? "" : "none";
   const quitBtn = $("source-quit-btn");
   if (quitBtn) quitBtn.textContent = `Quit ${srcName}`;
@@ -351,8 +375,8 @@ function renderDetect(env) {
 
   if (!env.zenInstalled) {
     zenCard.dataset.ok = "false";
-    zenPill.className = "pill pill-err"; zenPill.textContent = "Not installed";
-    zenDetail.textContent = "Zen Browser doesn't appear to be installed yet.";
+    zenPill.className = "pill pill-warn"; zenPill.textContent = "No profile found";
+    zenDetail.textContent = "Launch Zen once to create a browsing profile, quit it, then click Recheck.";
     zenSelect.style.display = "none";
   } else if (env.zenRunning) {
     zenCard.dataset.ok = "false";
@@ -433,15 +457,18 @@ $("zen-quit-btn").addEventListener("click", async () => {
 $("detect-recheck").addEventListener("click", () => runDetect());
 $("detect-back").addEventListener("click", () => goToSourcePicker());
 $("detect-next").addEventListener("click", () => goToPreview());
-$("zen-install-btn").addEventListener("click", () => {
+$("zen-install-btn").addEventListener("click", async () => {
   const api = Bridge();
-  if (api) api.open_url("https://zen-browser.app/");
+  if (api && !(await api.launch_zen())) api.open_url("https://zen-browser.app/");
 });
 
 // ---- preview --------------------------------------------------------------
 
 async function goToPreview() {
   setScreen("preview");
+  state.preview = null;
+  $("preview-go").disabled = true;
+  $("preview-warnings").style.display = "none";
   replace($("stat-strip"), el("span", {
     class: "muted",
     text: `Reading ${(state.source && state.source.displayName) || "Arc"} data…`,
@@ -461,6 +488,9 @@ async function goToPreview() {
 }
 
 function renderPreview(p) {
+  const warnings = $("preview-warnings");
+  warnings.style.display = (p.warnings || []).length ? "" : "none";
+  warnings.textContent = (p.warnings || []).join(" ");
   const strip = $("stat-strip");
   clear(strip);
   for (const [n, lbl] of [
@@ -476,6 +506,7 @@ function renderPreview(p) {
 
   const list = $("spaces-list"); clear(list);
   for (const s of p.spaces) list.appendChild(makeSpaceRow(s));
+  updatePreviewGate();
 
   const toggles = $("toggles"); clear(toggles);
   toggles.appendChild(makeToggle("includeOpenTabs", "Open tabs",
@@ -497,7 +528,7 @@ function makeStat(n, lbl) {
 
 function makeSpaceRow(s) {
   const hasColor = Array.isArray(s.color) && s.color.length === 3;
-  const excluded = (state.options.excludedSpaces || []).includes(s.name);
+  const excluded = (state.options.excludedSpaceIds || []).includes(s.spaceId);
 
   const checkbox = el("input", {
     type: "checkbox",
@@ -506,7 +537,7 @@ function makeSpaceRow(s) {
   });
   checkbox.checked = !excluded;
   checkbox.addEventListener("click", (ev) => ev.stopPropagation());
-  checkbox.addEventListener("change", () => toggleSpaceExcluded(s.name, !checkbox.checked, row));
+  checkbox.addEventListener("change", () => toggleSpaceExcluded(s.spaceId, !checkbox.checked, row));
 
   const row = el("div", {
     class: hasColor ? "space-row" : "space-row no-color",
@@ -522,19 +553,20 @@ function makeSpaceRow(s) {
         `${s.folderCount} folder${s.folderCount === 1 ? "" : "s"}` +
         (s.essentialCount ? ` · ${s.essentialCount} essential` : "")}),
     ]),
-    el("div", {class: "count", text: `${s.pinnedCount} tabs`}),
+    el("div", {class: "count", text:
+      `${s.pinnedCount + s.openCount} tab${s.pinnedCount + s.openCount === 1 ? "" : "s"}`}),
   ]);
 
   // Whole-card click toggles the checkbox so the entire row is the target.
   row.addEventListener("click", () => {
     checkbox.checked = !checkbox.checked;
-    toggleSpaceExcluded(s.name, !checkbox.checked, row);
+    toggleSpaceExcluded(s.spaceId, !checkbox.checked, row);
   });
   row.addEventListener("keydown", (ev) => {
     if (ev.key === " " || ev.key === "Enter") {
       ev.preventDefault();
       checkbox.checked = !checkbox.checked;
-      toggleSpaceExcluded(s.name, !checkbox.checked, row);
+      toggleSpaceExcluded(s.spaceId, !checkbox.checked, row);
     }
   });
 
@@ -548,12 +580,18 @@ function makeSpaceRow(s) {
 }
 
 function toggleSpaceExcluded(name, isExcluded, row) {
-  if (!Array.isArray(state.options.excludedSpaces)) state.options.excludedSpaces = [];
-  const list = state.options.excludedSpaces;
+  if (!Array.isArray(state.options.excludedSpaceIds)) state.options.excludedSpaceIds = [];
+  const list = state.options.excludedSpaceIds;
   const idx = list.indexOf(name);
   if (isExcluded && idx === -1) list.push(name);
   if (!isExcluded && idx !== -1) list.splice(idx, 1);
   if (row) row.dataset.included = isExcluded ? "false" : "true";
+  updatePreviewGate();
+}
+
+function updatePreviewGate() {
+  $("preview-go").disabled = !state.preview?.spaces?.some(s =>
+    !state.options.excludedSpaceIds.includes(s.spaceId));
 }
 
 function makeToggle(key, label, desc) {
@@ -751,7 +789,12 @@ async function goToProgress() {
 
   renderProgress();
 
-  await api.start_migration(currentOptionsJson());
+  const result = await api.start_migration(currentOptionsJson());
+  if (!result || !result.ok) {
+    clearInterval(state.elapsedHandle); state.elapsedHandle = null;
+    finishError({error: result?.error || "Migration could not start."});
+    return;
+  }
   state.pollHandle = setInterval(pollProgress, 120);
 }
 
@@ -1113,6 +1156,7 @@ function currentOptionsJson() {
     excludedSpaces: Array.isArray(state.options.excludedSpaces)
       ? state.options.excludedSpaces.slice()
       : [],
+    excludedSpaceIds: state.options.excludedSpaceIds.slice(),
     foldersCollapsed: state.options.foldersCollapsed,
     includeWorkspaces: state.options.includeWorkspaces,
     includePinnedTabs: state.options.includePinnedTabs,
@@ -1158,7 +1202,7 @@ async function setAppVersion() {
     const v = await api.version();
     if (typeof v === "string" && v) {
       const node = $("ver");
-      if (node) node.textContent = `browser2zen · v${v}`;
+      if (node) node.textContent = `edgebrowser2gen · v${v}`;
     }
   } catch (_) { /* best effort */ }
 }

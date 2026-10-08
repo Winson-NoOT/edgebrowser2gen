@@ -11,8 +11,10 @@ Format: mozlz4 (8-byte magic + 4-byte LE size + lz4 block compressed JSON)
 
 import json
 import logging
+import os
 import shutil
 import struct
+import tempfile
 import time
 import uuid
 from datetime import datetime
@@ -48,10 +50,19 @@ def write_mozlz4(file_path: Path, data: dict) -> None:
     """Serialize JSON data and write as mozlz4 file."""
     json_bytes = json.dumps(data, separators=(',', ':')).encode('utf-8')
     compressed = lz4.block.compress(json_bytes, store_size=False)
-    with open(file_path, 'wb') as f:
-        f.write(MOZLZ4_MAGIC)
-        f.write(struct.pack('<I', len(json_bytes)))
-        f.write(compressed)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=file_path.parent, delete=False) as f:
+            temporary = Path(f.name)
+            f.write(MOZLZ4_MAGIC)
+            f.write(struct.pack('<I', len(json_bytes)))
+            f.write(compressed)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary, file_path)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
 
 
 class ZenSessionsImporter:
@@ -76,13 +87,22 @@ class ZenSessionsImporter:
     # --- Backup ---
 
     def _backup_sessions(self) -> bool:
-        if not self.sessions_file.exists():
-            return True
         try:
-            timestamp = int(datetime.now().timestamp())
-            backup_path = self.zen_profile / f"zen-sessions.jsonlz4.backup.{timestamp}"
-            shutil.copy2(self.sessions_file, backup_path)
-            logger.info(f"  Backed up zen-sessions.jsonlz4 to {backup_path.name}")
+            files = [self.sessions_file, self.zen_profile / "sessionstore.jsonlz4",
+                     self.zen_profile / "sessionstore-backups/recovery.jsonlz4",
+                     self.zen_profile / "sessionstore-backups/recovery.baklz4"]
+            for source in files:
+                if not source.exists():
+                    continue
+                timestamp = int(datetime.now().timestamp())
+                backup_path = source.with_name(f"{source.name}.backup.{timestamp}")
+                while backup_path.exists():
+                    timestamp += 1
+                    backup_path = source.with_name(f"{source.name}.backup.{timestamp}")
+                with backup_path.open("xb") as target, source.open("rb") as original:
+                    shutil.copyfileobj(original, target)
+                shutil.copystat(source, backup_path)
+                logger.info("  Backed up %s", source.name)
             return True
         except Exception as e:
             logger.error(f"Failed to backup zen-sessions.jsonlz4: {e}")
@@ -92,10 +112,11 @@ class ZenSessionsImporter:
 
     def _read_existing(self) -> dict:
         if self.sessions_file.exists():
-            try:
-                return read_mozlz4(self.sessions_file)
-            except Exception as e:
-                logger.warning(f"Could not read existing zen-sessions.jsonlz4: {e}")
+            data = read_mozlz4(self.sessions_file)
+            if not isinstance(data, dict) or any(not isinstance(data.get(key, []), list)
+                                               for key in ("spaces", "tabs", "folders", "groups")):
+                raise ValueError("Existing Zen session has an unsupported structure")
+            return data
 
         return {
             "spaces": [],
@@ -109,8 +130,9 @@ class ZenSessionsImporter:
     # --- Build structures ---
 
     def _build_space(self, space_data: dict) -> dict:
+        stable_uuid = space_data.get("zen_uuid")
         space = {
-            "uuid": self._generate_space_uuid(),
+            "uuid": "{" + str(uuid.UUID(stable_uuid.strip("{}"))) + "}" if stable_uuid else self._generate_space_uuid(),
             "name": space_data["space_name"],
             "theme": {
                 "type": "gradient",
@@ -121,6 +143,9 @@ class ZenSessionsImporter:
             "containerTabId": 0,
             "hasCollapsedPinnedTabs": False,
         }
+
+        if stable_uuid:
+            space["_migrationStableIdentity"] = True
 
         icon = space_data.get("icon")
         if icon:
@@ -210,7 +235,6 @@ class ZenSessionsImporter:
             "attributes": {},
             "index": index,
         }
-
         if folder_id:
             tab["groupId"] = folder_id
         return tab
@@ -244,6 +268,7 @@ class ZenSessionsImporter:
         tabs_list).
         """
         space = self._build_space(space_data)
+        space["containerTabId"] = user_context_id
         workspace_uuid = space["uuid"]
 
         # Build folders with hierarchy
@@ -355,18 +380,24 @@ class ZenSessionsImporter:
                              new_tabs: list[dict], new_folders: list[dict]) -> dict:
         """Merge imported data with existing zen-sessions data."""
         existing_space_names = {s["name"] for s in existing.get("spaces", [])}
+        existing_space_ids = {s["uuid"] for s in existing.get("spaces", [])}
 
         spaces_to_add = []
         skipped_space_uuids = set()
         for space in new_spaces:
-            if space["name"] in existing_space_names:
+            stable = space.pop("_migrationStableIdentity", False)
+            if space["uuid"] in existing_space_ids or (not stable and space["name"] in existing_space_names):
                 logger.info(f"  Skipping existing space: {space['name']}")
                 skipped_space_uuids.add(space["uuid"])
             else:
                 spaces_to_add.append(space)
+                existing_space_ids.add(space["uuid"])
+                existing_space_names.add(space["name"])
 
         # Filter out tabs/folders belonging to skipped spaces
-        tabs_to_add = [t for t in new_tabs if t["zenWorkspace"] not in skipped_space_uuids]
+        skipped_folder_ids = {f["id"] for f in new_folders if f["workspaceId"] in skipped_space_uuids}
+        tabs_to_add = [t for t in new_tabs if t["zenWorkspace"] not in skipped_space_uuids
+                       and t.get("groupId") not in skipped_folder_ids]
         folders_to_add = [f for f in new_folders if f["workspaceId"] not in skipped_space_uuids]
 
         merged = dict(existing)
@@ -443,11 +474,15 @@ class ZenSessionsImporter:
             for win_list_key in ("windows", "_closedWindows"):
                 for win in ss_data.get(win_list_key, []):
                     # Replace pinned tabs with zen-sessions tabs (ensures consistent zenSyncId + groupId)
-                    unpinned = [t for t in win.get("tabs", []) if not t.get("pinned")]
+                    imported_ids = {t.get("zenSyncId") for t in merged.get("tabs", []) if t.get("zenSyncId")}
+                    unpinned = [t for t in win.get("tabs", []) if not t.get("pinned")
+                                and t.get("zenSyncId") not in imported_ids]
                     win["tabs"] = list(merged.get("tabs", [])) + unpinned
 
                     # Replace groups with folder groups
-                    win["groups"] = list(folder_groups)
+                    group_ids = {group["id"] for group in folder_groups}
+                    win["groups"] = list(folder_groups) + [group for group in win.get("groups", [])
+                                                          if group.get("id") not in group_ids]
 
                     # Also sync folders and spaces into window data
                     win["folders"] = list(merged.get("folders", []))
@@ -478,7 +513,7 @@ class ZenSessionsImporter:
             True on success, False on failure.
         """
         try:
-            logger.info("Importing Arc data into zen-sessions.jsonlz4...")
+            logger.info("Importing browser data into zen-sessions.jsonlz4...")
 
             all_new_spaces = []
             all_new_tabs = []
@@ -495,7 +530,7 @@ class ZenSessionsImporter:
                 all_new_folders.extend(folders)
                 all_new_tabs.extend(tabs)
 
-                pinned_n = sum(1 for t in tabs if t.get("pinned"))
+                pinned_n = sum(1 for t in tabs if t.get("pinned") and not t.get("zenIsEmpty"))
                 open_n = sum(1 for t in tabs if not t.get("pinned"))
                 logger.info(
                     f"  {space_name}: {pinned_n} pinned tabs, "
@@ -512,7 +547,8 @@ class ZenSessionsImporter:
 
             # Backup existing file
             if not self._backup_sessions():
-                logger.warning("Could not backup zen-sessions.jsonlz4, continuing anyway...")
+                logger.error("Required Zen backups failed; import stopped before writing.")
+                return False
 
             # Read existing and merge
             existing = self._read_existing()
@@ -532,7 +568,7 @@ class ZenSessionsImporter:
 
             logger.info(
                 f"Successfully imported {added_spaces} spaces, "
-                f"{added_tabs} pinned tabs, {added_folders} folders"
+                f"{added_tabs} tab records (including folder placeholders), {added_folders} folders"
             )
             logger.info("Restart Zen browser to see your imported data")
             return True

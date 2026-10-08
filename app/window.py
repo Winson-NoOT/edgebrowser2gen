@@ -77,7 +77,7 @@ def launch(debug: bool = False) -> None:
                 f"  const v = {VERSION!r};"
                 "   document.body.dataset.appVersion = v;"
                 "   const node = document.getElementById('ver');"
-                "   if (node) node.textContent = 'browser2zen · v' + v;"
+                "   if (node) node.textContent = 'edgebrowser2gen · v' + v;"
                 "})();"
             )
         except Exception as exc:

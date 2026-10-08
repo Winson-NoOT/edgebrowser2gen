@@ -149,6 +149,7 @@ class WorkspaceScan:
     space: SpaceRecord | None = None
     issues: list[str] = field(default_factory=list)
     cache_modified: float | None = None
+    storage_kind: str = "legacy_cache"
 
     def summary(self, *, include_names: bool = True) -> dict:
         return {
@@ -157,7 +158,9 @@ class WorkspaceScan:
             "recoverable_tabs": len(self.space.open_tabs) if self.space else 0,
             "groups": len(self.space.folders) if self.space else 0,
             "cache_modified": self.cache_modified,
-            "status": "cached_snapshot" if self.space else "unavailable",
+            "status": ("local_sync_snapshot" if self.storage_kind == "sync_v2" else "cached_snapshot")
+            if self.space else "unavailable",
+            "storage_kind": self.storage_kind,
             "issues": list(self.issues),
         }
 
@@ -204,13 +207,35 @@ def scan_profile(profile: Path) -> list[WorkspaceScan]:
     return results
 
 
-def scan_workspaces(user_data: Path) -> list[WorkspaceScan]:
+def scan_workspaces(user_data: Path, profile_name: str | None = None) -> list[WorkspaceScan]:
+    from .edge_sync import scan_sync_profile
+
     results: list[WorkspaceScan] = []
     for profile in sorted(user_data.iterdir()):
-        if profile.is_dir() and (profile / "Workspaces" / "WorkspacesCache").is_file():
+        if not profile.is_dir() or (profile_name is not None and profile.name != profile_name):
+            continue
+        modern = scan_sync_profile(profile)
+        if modern is not None:
+            results.extend(modern)
+        elif (profile / "Workspaces" / "WorkspacesCache").is_file():
             results.extend(scan_profile(profile))
     return results
 
 
 def export_workspaces(results: list[WorkspaceScan]) -> ExportData:
-    return ExportData(source="edge", spaces=[result.space for result in results if result.space is not None])
+    spaces = [result.space for result in results if result.space is not None]
+    for space in spaces:
+        space.zen_uuid = "{" + str(uuid.UUID(space.space_id)) + "}"
+    unavailable = sum(result.space is None for result in results)
+    legacy = sum(result.storage_kind == "legacy_cache" for result in results)
+    warnings = []
+    if results:
+        warnings.append("Workspace tabs come from local Edge snapshots. Online sync freshness is not verified.")
+    if unavailable:
+        warnings.append(f"{unavailable} listed workspace(s) have no readable local tab data and will be omitted.")
+    if legacy:
+        warnings.append(f"{legacy} workspace(s) use legacy caches that may be stale or incomplete.")
+    if any(result.space and result.reported_tabs != len(result.space.open_tabs) for result in results):
+        warnings.append("Some tab counts differ from Edge's records. Internal pages are skipped; "
+                        "legacy caches may be incomplete.")
+    return ExportData(source="edge", spaces=spaces, warnings=warnings)
