@@ -222,10 +222,13 @@ def _tasklist_running(image_names: tuple[str, ...]) -> bool:
         try:
             r = subprocess.run(
                 ["tasklist", "/fi", f"imagename eq {name}", "/fo", "csv", "/nh"],
-                capture_output=True, text=True, timeout=4,
+                capture_output=True, text=True, timeout=8,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-        except Exception:
-            continue
+        except Exception as exc:
+            raise RuntimeError(f"Could not check the Windows process {name}.") from exc
+        if r.returncode != 0:
+            raise RuntimeError(f"Windows process check failed for {name}.")
         # ``tasklist`` prints a notice line ("INFO: No tasks ...") on stdout
         # when nothing matches; success means at least one CSV row.
         if r.returncode == 0 and r.stdout and name.lower() in r.stdout.lower():

@@ -194,12 +194,15 @@ class ChromiumExtractor(BrowserExtractor):
                 try:
                     r = subprocess.run(
                         ["tasklist", "/FI", f"IMAGENAME eq {image}"],
-                        capture_output=True, text=True, timeout=2,
+                        capture_output=True, text=True, timeout=8,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                     )
+                    if r.returncode != 0:
+                        raise RuntimeError("Windows process check failed.")
                     if image.lower() in r.stdout.lower():
                         return True
-                except Exception:
-                    continue
+                except Exception as exc:
+                    raise RuntimeError(f"Could not verify whether {self.display_name} is closed.") from exc
             return False
         return False
 
@@ -222,7 +225,8 @@ class ChromiumExtractor(BrowserExtractor):
             for image in self.windows_process_names:
                 try:
                     subprocess.run(["taskkill", "/im", image],
-                                   capture_output=True, timeout=3)
+                                   capture_output=True, timeout=3,
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 except Exception:
                     continue
         else:
@@ -273,7 +277,8 @@ class ChromiumExtractor(BrowserExtractor):
             for image in self.windows_process_names:
                 try:
                     subprocess.run(["taskkill", "/f", "/im", image],
-                                   capture_output=True, timeout=3)
+                                   capture_output=True, timeout=3,
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                     issued = True
                 except Exception:
                     continue

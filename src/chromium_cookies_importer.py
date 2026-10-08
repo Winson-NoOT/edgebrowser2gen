@@ -344,12 +344,30 @@ class CookiesImporter:
         if self._tempdir is None:
             self._tempdir = Path(tempfile.mkdtemp(prefix="browser2zen_cookies_"))
         dest = self._tempdir / f"{src.parent.name}_{src.name}.db"
-        shutil.copy2(src, dest)
-        for suffix in ("-wal", "-shm", "-journal"):
-            sib = src.with_name(src.name + suffix)
-            if sib.exists():
-                shutil.copy2(sib, dest.with_name(dest.name + suffix))
+        try:
+            shutil.copy2(src, dest)
+            for suffix in ("-wal", "-shm", "-journal"):
+                sib = src.with_name(src.name + suffix)
+                if sib.exists():
+                    shutil.copy2(sib, dest.with_name(dest.name + suffix))
+        except PermissionError as exc:
+            profile = src.parent.parent.name if src.parent.name == "Network" else src.parent.name
+            raise RuntimeError(
+                f"Cannot read cookies for profile {profile}: the cookie database is locked or inaccessible. "
+                "Close the source browser, including background processes, and retry; "
+                "or turn off Cookies / login state."
+            ) from exc
         return dest
+
+    def check_source_readable(self) -> None:
+        """Check cookie snapshots before migration writes any destination data."""
+        cookie_dbs = self._injected_dbs if self._injected_dbs is not None else _cookie_dbs_default()
+        try:
+            for db in cookie_dbs:
+                if db.is_file():
+                    self._snapshot(db)
+        finally:
+            self._cleanup()
 
     def _cleanup(self) -> None:
         if self._tempdir and self._tempdir.exists():

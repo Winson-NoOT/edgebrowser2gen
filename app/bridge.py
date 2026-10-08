@@ -366,6 +366,8 @@ class Bridge:
         try:
             opts = self._parse_options(opts_json)
             environment = self.orchestrator.check_environment()
+            if getattr(environment, "errors", []):
+                return {"ok": False, "error": "Browser status could not be checked. " + " ".join(environment.errors)}
             if environment.source_running or environment.zen_running:
                 return {"ok": False, "error": "Close the source browser and Zen before migrating."}
             if opts.zen_profile_path.resolve() not in {p.path.resolve() for p in environment.zen_profiles}:
@@ -380,15 +382,23 @@ class Bridge:
             try:
                 # Drain the iterator; events flow into the queue via the bus.
                 errors = []
+                completed = []
+                failed = []
                 for event in self.orchestrator.migrate(opts, preserve_progress=True):
                     if event.get("kind") == "step_error":
-                        errors.append(event.get("detail") or event.get("message", "Migration step failed."))
+                        failed.append(event["step"])
+                        detail = event.get("detail") or event.get("message", "Migration step failed.")
+                        errors.append(f"{event['step']}: {detail}")
+                    elif event.get("kind") == "step_done":
+                        completed.append(event["step"])
                 with self._lock:
                     self._final_state = {
                         "status": "error" if errors else "done",
                         **({"error": "Some migration steps failed. " + " ".join(errors)} if errors else {}),
                         "backups": [str(p) for p in self.orchestrator.find_backups(opts.zen_profile_path)],
                         "zenProfilePath": str(opts.zen_profile_path),
+                        "completedSteps": completed,
+                        "failedSteps": failed,
                     }
             except Exception as exc:
                 logger.exception("migration worker crashed")

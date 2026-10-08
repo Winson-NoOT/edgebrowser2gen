@@ -156,3 +156,110 @@ def test_workspace_and_open_tabs_use_the_selected_container(tmp_path):
     sessions = read_mozlz4(importer.sessions_file)
     assert sessions["spaces"][0]["containerTabId"] == 4
     assert all(tab["userContextId"] == 4 for tab in sessions["tabs"] if not tab.get("zenIsEmpty"))
+
+
+def test_locked_cookie_preflight_preserves_destination(tmp_path, monkeypatch, caplog):
+    import chromium_cookies_importer as cookies
+
+    destination = tmp_path / "zen"
+    destination.mkdir()
+    existing = destination / "containers.json"
+    existing.write_text('{"identities": []}')
+    source_db = tmp_path / "Default/Network/Cookies"
+    source_db.parent.mkdir(parents=True)
+    source_db.write_bytes(b"locked source fixture")
+    source = EdgeExtractor()
+    monkeypatch.setattr(source, "extract", lambda: export_workspaces(
+        decode_sync_workspaces(fixture_records(), "Default")))
+    monkeypatch.setattr(source, "cookie_db_paths", lambda: [source_db])
+
+    def locked(*args):
+        raise PermissionError("[WinError 32] sharing violation")
+
+    monkeypatch.setattr(cookies.shutil, "copy2", locked)
+    events = list(MigrationOrchestrator(source).migrate(
+        MigrationOptions(zen_profile_path=destination, include_cookies=True)))
+    error = next(e for e in events if e["kind"] == "step_error")
+    assert error["step"] == "cookies"
+    assert "Default" in error["detail"] and "Cookies / login state" in error["detail"]
+    assert "Migration step cookies failed" in caplog.text
+    assert existing.read_text() == '{"identities": []}'
+    assert list(destination.iterdir()) == [existing]
+
+
+def test_cookie_snapshot_check_cleans_up_and_preserves_source(tmp_path):
+    from chromium_cookies_importer import CookiesImporter
+
+    db = tmp_path / "Default/Cookies"
+    db.parent.mkdir()
+    db.write_bytes(b"cookie fixture")
+    wal = db.with_name("Cookies-wal")
+    wal.write_bytes(b"wal fixture")
+    importer = CookiesImporter(tmp_path / "zen", cookie_dbs=[db])
+    importer.check_source_readable()
+    assert importer._tempdir is None
+    assert db.read_bytes() == b"cookie fixture"
+    assert wal.read_bytes() == b"wal fixture"
+    assert not (tmp_path / "zen").exists()
+
+
+def test_windows_process_timeout_does_not_report_browser_closed(monkeypatch):
+    import subprocess
+    from types import SimpleNamespace
+
+    import pytest
+
+    import extractors.chromium as chromium
+
+    monkeypatch.setattr(chromium, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(chromium.sys, "platform", "win32")
+
+    def timed_out(*args, **kwargs):
+        raise subprocess.TimeoutExpired("tasklist", 8)
+
+    monkeypatch.setattr(chromium.subprocess, "run", timed_out)
+    with pytest.raises(RuntimeError, match="Could not verify"):
+        EdgeExtractor().is_running()
+
+
+def test_desktop_rejects_uncertain_browser_status(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    bridge = Bridge()
+    monkeypatch.setattr(bridge.orchestrator, "check_environment", lambda: SimpleNamespace(
+        source_running=False, zen_running=False, errors=["Process check timed out"]))
+    result = bridge.start_migration(json.dumps({"zenProfilePath": str(tmp_path)}))
+    assert result["ok"] is False
+    assert "could not be checked" in result["error"]
+    assert bridge._worker is None
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_late_cookie_failure_reports_saved_sessions(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from chromium_cookies_importer import CookiesImporter
+
+    bridge = Bridge()
+    monkeypatch.setattr(bridge.orchestrator.source, "extract", lambda: export_workspaces(
+        decode_sync_workspaces(fixture_records(), "Default")))
+    monkeypatch.setattr(bridge.orchestrator, "check_environment", lambda: SimpleNamespace(
+        source_running=False, zen_running=False, zen_profiles=[SimpleNamespace(path=tmp_path)]))
+    monkeypatch.setattr(CookiesImporter, "check_source_readable", lambda self: None)
+
+    def locked(self):
+        raise RuntimeError("Cookie database became locked")
+
+    monkeypatch.setattr(CookiesImporter, "import_cookies", locked)
+    result = bridge.start_migration(json.dumps({"zenProfilePath": str(tmp_path),
+        "includeWorkspaces": False, "includeBookmarks": False,
+        "includeFavicons": False, "includeCookies": True}))
+    assert result["ok"] is True
+    bridge._worker.join(timeout=5)
+    final = bridge.drain_progress()["state"]
+    assert final["status"] == "error"
+    assert final["failedSteps"] == ["cookies"]
+    assert "sessions" in final["completedSteps"]
+    assert "cookies:" in final["error"]
+    assert (tmp_path / "zen-sessions.jsonlz4").exists()
+    assert not (tmp_path / ".browser2zen-migrated").exists()

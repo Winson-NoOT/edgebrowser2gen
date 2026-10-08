@@ -464,6 +464,10 @@ body[data-platform="mac"] main {
 }
 .gate.is-error { background: var(--error-soft); border-color: rgba(255, 107, 107, 0.4); }
 
+.actions-row [hidden] {
+  display: none;
+}
+
 .actions-row {
   margin-top: auto;
   display: flex;

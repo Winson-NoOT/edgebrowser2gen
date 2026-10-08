@@ -343,6 +343,8 @@ class MigrationOrchestrator:
 
     def _error_step(self, step: str, exc: BaseException) -> None:
         self._error_count += 1
+        logger.error("Migration step %s failed: %s", step, exc,
+                     exc_info=(type(exc), exc, exc.__traceback__))
         self._emit({
             "kind": "step_error",
             "step": step,
@@ -402,6 +404,15 @@ class MigrationOrchestrator:
         yield from self._drain_yield()
 
         # 2: containers --------------------------------------------------
+        # Windows can retain an exclusive cookie lock after the browser window
+        # closes. Check the actual files before changing any destination data.
+        if opts.include_cookies and self.source.name in {"arc", "chrome", "edge", "brave"}:
+            try:
+                CookiesImporter(zen_profile, cookie_dbs=self.source.cookie_db_paths()).check_source_readable()
+            except Exception as exc:
+                self._error_step("cookies", exc)
+                yield from self._drain_yield()
+                return
         # Back up all possible destinations before any step changes the profile.
         try:
             if not zen_profile.is_dir():

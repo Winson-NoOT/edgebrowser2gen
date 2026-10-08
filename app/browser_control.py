@@ -66,6 +66,7 @@ def _taskkill(image_name: str, force: bool) -> bool:
         r = subprocess.run(
             ["taskkill", *flags],
             capture_output=True, text=True, timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except Exception:
         return False

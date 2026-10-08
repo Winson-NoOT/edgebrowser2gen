@@ -901,6 +901,7 @@ function handleEvent(ev) {
     }
   } else if (ev.kind === "step_error") {
     state.stepStates[ev.step] = "error";
+    state.logLines.push({kind: ev.kind, message: `${ev.message}: ${ev.detail || ""}`, step: ev.step});
   } else {
     state.logLines.push({kind: ev.kind, message: ev.message, step: ev.step});
     if (state.logLines.length > 500) state.logLines.shift();
@@ -1101,9 +1102,20 @@ $("done-quit").addEventListener("click", async () => {
 function finishError(finalState) {
   setScreen("error");
   $("error-summary").textContent = finalState.error || "Something went wrong.";
-  const detail = (finalState.trace || "") + "\n\n" + state.logLines.map(l => `[${l.kind}] ${l.message}`).join("\n");
+  const completed = (finalState.completedSteps || []).filter(s => !["extract", "finalize"].includes(s));
+  const imported = completed.length > 0;
+  $("error-recovery").textContent = imported
+    ? `Completed: ${completed.map(s => state.stepLabels[s] || s).join(", ")}. These imports were saved. Avoid repeating history import; it can duplicate visits.`
+    : "No import step completed. Review the error before retrying.";
+  $("error-launch").hidden = !completed.includes("sessions");
+  const detail = (finalState.error || "") + "\n" + (finalState.trace || "") + "\n\n" + state.logLines.map(l => `[${l.kind}] ${l.message}`).join("\n");
   $("error-body").textContent = detail.trim();
 }
+
+$("error-launch").addEventListener("click", async () => {
+  const api = Bridge();
+  if (api) await api.launch_zen();
+});
 
 $("error-quit").addEventListener("click", async () => {
   const api = Bridge(); if (api) api.quit_app();

@@ -42,6 +42,8 @@ To use the desktop app, install its GUI dependencies and launch it:
 
 `Launch edgebrowser2gen.ps1` is a convenience launcher. Choose Microsoft Edge, close both browsers, select an Edge profile and a Zen profile, then review the workspace list and coverage warnings. Start migration only when the preview matches what you want. The app backs up destination files before writing and refuses to start while either browser is running. Importing the same source workspace again keeps its existing Zen copy; this is a one-time migration, not ongoing synchronization.
 
+Cookies are optional. Edge background processes can keep the cookie database locked after its window closes. The app checks cookie file access before writing imports; close Edge completely or disable **Cookies / login state** if that check fails. If a later step fails, the error screen lists completed imports and offers **Open Zen** when sessions were imported. Those imports remain saved. Avoid repeating a completed history import because it can add duplicate visits.
+
 ## Edge extensions
 
 Click **Review Edge extensions** on the welcome screen or the workspace preview. This shows user add-ons found in local Edge profiles, excluding browser components, apps, themes and explicitly removed external extensions. Localized names are resolved from their manifests; enabled state is labeled unknown when Edge does not store it in a supported form.
