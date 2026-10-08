@@ -150,7 +150,8 @@ class ZenSpaceImporter:
         container_config["lastUserContextId"] = last_context_id
 
         # Save updated container configuration
-        self.save_containers(container_config)
+        if not self.save_containers(container_config):
+            raise RuntimeError("Could not save Zen containers")
 
         return space_to_container
 
@@ -232,7 +233,8 @@ class ZenSpaceImporter:
             # Generate a UUID for the active workspace (first space)
             if arc_spaces:
                 active_uuid = str(uuid.uuid4())
-                self.update_prefs_for_workspaces(active_uuid)
+                if not self.update_prefs_for_workspaces(active_uuid):
+                    raise RuntimeError("Could not save Zen workspace preferences")
 
             logger.info(f"✅ Successfully created {len(space_to_container)} Zen containers")
 

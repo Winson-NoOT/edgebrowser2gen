@@ -25,7 +25,7 @@
       <div class="hero">
         <div class="brand-pair" id="brand-pair"></div>
         <p class="eyebrow" id="welcome-eyebrow">Browser → Zen</p>
-        <h1 class="display">Move your browser, keep your setup.</h1>
+        <h1 class="display">Move your tabs and workspaces.</h1>
         <p class="muted" style="margin-top: var(--space-3); max-width: 520px; line-height: 1.5;">
           Bring Edge workspaces, tabs and groups into Zen. Review local recovery
           coverage before importing. Bookmarks and other browser data are also supported.
@@ -34,6 +34,7 @@
       <div class="actions">
         <button class="btn btn-primary" id="welcome-go">Let's go</button>
         <button class="btn btn-soft" id="welcome-backup">Backup or restore Zen</button>
+        <button class="btn btn-soft" id="welcome-extensions">Review Edge extensions</button>
       </div>
       <div class="footer">
         <span id="footer-brand">edgebrowser2gen · open source</span>
@@ -210,12 +211,37 @@
 
       <div class="spaces-list" id="spaces-list"></div>
 
+      <details class="migration-limits">
+        <summary>What needs separate setup?</summary>
+        <p>Extensions need Firefox-compatible versions installed in Zen. Extension settings, saved passwords,
+          autofill, browser preferences and workspace sharing are not transferred by this app.</p>
+        <button class="btn btn-soft btn-pill" id="preview-extensions">Review Edge extensions</button>
+      </details>
+
       <p class="eyebrow" style="margin-top: var(--space-6);">Optional</p>
       <div class="toggles" id="toggles"></div>
 
       <div class="actions-row">
         <button class="btn btn-ghost" id="preview-back">Back</button>
         <button class="btn btn-primary" id="preview-go" disabled>Start migration</button>
+      </div>
+    </section>
+
+    <section class="screen" id="screen-extensions">
+      <p class="eyebrow">Extension checklist</p>
+      <h1 class="h1">Bring your add-ons to Zen.</h1>
+      <p class="muted">Find Firefox versions of your Edge extensions and install them in Zen.
+        Check the publisher and permissions before installing. Settings and sign-ins need separate setup.</p>
+      <label for="extensions-profile">Edge profile</label>
+      <select class="profile-select" id="extensions-profile"></select>
+      <p class="subtle muted" id="extensions-summary" role="status"></p>
+      <div class="gate" id="extensions-warnings" style="display:none;"></div>
+      <div class="extension-list" id="extensions-list"></div>
+      <p class="subtle muted">Store searches open in Zen only when you click a button. Matching versions
+        are not guaranteed. Close Zen again before migrating workspaces.</p>
+      <div class="actions-row">
+        <button class="btn btn-ghost" id="extensions-back">Back</button>
+        <button class="btn btn-soft" id="extensions-refresh">Refresh</button>
       </div>
     </section>
 

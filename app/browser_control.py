@@ -158,12 +158,15 @@ def _is_running(name: BrowserName) -> bool:
     return is_arc_running() if name == "arc" else is_zen_running()
 
 
-def launch_zen() -> bool:
+def launch_zen(url: str | None = None) -> bool:
     """Open Zen using the OS shell. Returns True on success."""
     if sys.platform == "darwin":
         for app_name in ("Zen", "Zen Browser", "zen"):
             try:
-                r = subprocess.run(["open", "-a", app_name],
+                args = ["open", "-a", app_name]
+                if url:
+                    args.extend(["--args", "-new-tab", url])
+                r = subprocess.run(args,
                                    capture_output=True, text=True, timeout=5)
             except Exception:
                 continue
@@ -176,7 +179,8 @@ def launch_zen() -> bool:
         if exe is None:
             return False
         try:
-            subprocess.Popen([str(exe)],
+            args = [str(exe)] + (["-new-tab", url] if url else [])
+            subprocess.Popen(args,
                              creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
             return True
         except Exception:

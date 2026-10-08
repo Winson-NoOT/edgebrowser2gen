@@ -115,6 +115,31 @@ class Bridge:
         src = self.orchestrator.source
         return {"name": src.name, "displayName": src.display_name}
 
+    def edge_extension_inventory(self, profile_name: str | None = None) -> dict:
+        from extractors.edge import EdgeExtractor
+        from extractors.edge_extensions import scan_extensions
+
+        source = EdgeExtractor(profile_name=profile_name or None)
+        available = source.available_profile_names()
+        if profile_name and profile_name not in available:
+            return {"error": "The selected Edge profile was not found."}
+        try:
+            result = scan_extensions(source.profile_paths())
+            result["profiles"] = available
+            return result
+        except (ValueError, OSError):
+            return {"error": "Edge extensions could not be read. Close Edge and retry."}
+
+    def open_edge_extension_search(self, profile_name: str, identifier: str) -> dict:
+        with self._lock:
+            if self._worker is not None and self._worker.is_alive():
+                return {"ok": False, "error": "Wait for the current migration to finish."}
+        inventory = self.edge_extension_inventory(profile_name)
+        for extension in inventory.get("extensions", []):
+            if extension["id"] == identifier:
+                return {"ok": launch_zen(extension["searchUrl"])}
+        return {"ok": False, "error": "This Edge extension is no longer in the local inventory."}
+
     def set_source_profile(self, name: str | None) -> dict:
         with self._lock:
             if self._worker is not None and self._worker.is_alive():

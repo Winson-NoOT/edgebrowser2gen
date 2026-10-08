@@ -14,10 +14,11 @@ The new workspace recovery path can:
 - Honor current LevelDB records, tombstones and pending sync deletions.
 - Report missing local data, mismatched counts, and unverified sync freshness.
 - Choose Edge profiles and individual workspaces in the desktop preview.
+- Review locally installed Edge add-ons by profile and open Firefox Add-ons searches in Zen.
 - Merge workspaces into Zen with backups, stable source identities and repeated-import protection.
 - Export a JSON recovery file or generate a Zen session file in a new staging directory.
 
-This migrates locally recoverable browser data, rather than an entire browser installation. Workspace tabs become ordinary open tabs; workspace tab pin state is not recovered. Groups become Zen folders. Collaboration, Microsoft account sync, extension settings, and full tab navigation histories are not migrated. Internal Edge pages are skipped. Local snapshots can be stale, and a cloud-only workspace with no supported local tab records cannot be recovered.
+This migrates locally recoverable browser data, rather than an entire browser installation. Workspace tabs become ordinary open tabs; workspace tab pin state is not recovered. Groups become Zen folders. Collaboration, Microsoft account sync, extension settings, saved passwords, autofill, browser preferences, and full tab navigation histories are not migrated. Internal Edge pages are skipped. Local snapshots can be stale, and a cloud-only workspace with no supported local tab records cannot be recovered.
 
 Run the scanner to see coverage for your own installation. Reported workspace counts and recoverable cached-tab counts can differ. Install and launch Zen once to create a regular browsing profile before planning a live migration.
 
@@ -40,6 +41,16 @@ To use the desktop app, install its GUI dependencies and launch it:
 ```
 
 `Launch edgebrowser2gen.ps1` is a convenience launcher. Choose Microsoft Edge, close both browsers, select an Edge profile and a Zen profile, then review the workspace list and coverage warnings. Start migration only when the preview matches what you want. The app backs up destination files before writing and refuses to start while either browser is running. Importing the same source workspace again keeps its existing Zen copy; this is a one-time migration, not ongoing synchronization.
+
+## Edge extensions
+
+Click **Review Edge extensions** on the welcome screen or the workspace preview. This shows user add-ons found in local Edge profiles, excluding browser components, apps, themes and explicitly removed external extensions. Localized names are resolved from their manifests; enabled state is labeled unknown when Edge does not store it in a supported form.
+
+Each **Find Firefox version** button opens a Mozilla Add-ons search in Zen. Searches are not verified compatibility matches, and the tool does not install add-ons automatically. Confirm the publisher, supported features and permissions, then install the Firefox version yourself. Some Edge extensions have no equivalent. Extension settings, private storage, sign-ins and licenses are not copied. Close Zen again before starting workspace migration.
+
+Zen's [extension documentation](https://docs.zen-browser.app/user-manual/extensions) specifies Firefox add-ons as its extension source. The **Backup or restore Zen** feature can copy extensions between Zen profiles; that is a separate operation from migrating Edge extensions.
+
+See the [migration review](docs/MIGRATION_REVIEW.md) for the complete support matrix and remaining gaps.
 
 ## Inspect workspace coverage
 

@@ -442,6 +442,8 @@ class MigrationOrchestrator:
             except Exception as exc:
                 self._error_step("containers", exc)
             yield from self._drain_yield()
+            if self._error_count:
+                return
 
         # 3: sessions / pinned tabs / folders ----------------------------
         if opts.include_pinned_tabs or opts.include_workspaces:

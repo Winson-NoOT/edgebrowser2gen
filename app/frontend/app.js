@@ -205,6 +205,70 @@ $("tl-close").addEventListener("click", async () => {
 
 $("welcome-go").addEventListener("click", () => goToSourcePicker());
 $("welcome-backup").addEventListener("click", () => setScreen("backup-mode"));
+let extensionReturnScreen = "welcome";
+let extensionProfile = null;
+let extensionRequest = 0;
+$("welcome-extensions").addEventListener("click", () => goToExtensions("welcome"));
+$("preview-extensions").addEventListener("click", () => goToExtensions("preview"));
+$("extensions-back").addEventListener("click", () => setScreen(extensionReturnScreen));
+$("extensions-refresh").addEventListener("click", () => loadExtensions());
+$("extensions-profile").addEventListener("change", () => {
+  extensionProfile = $("extensions-profile").value || null;
+  loadExtensions();
+});
+
+async function goToExtensions(returnScreen) {
+  extensionReturnScreen = returnScreen;
+  extensionProfile = returnScreen === "preview" ? state.env?.selectedSourceProfile || null : null;
+  setScreen("extensions");
+  await loadExtensions();
+}
+
+async function loadExtensions() {
+  const request = ++extensionRequest;
+  const profile = extensionProfile;
+  $("extensions-summary").textContent = "Reading local Edge extension metadata…";
+  clear($("extensions-list"));
+  $("extensions-warnings").style.display = "none";
+  const api = await whenBridgeReady();
+  const inventory = await api.edge_extension_inventory(profile);
+  if (request !== extensionRequest) return;
+  if (inventory.error) { $("extensions-summary").textContent = inventory.error; return; }
+  const selector = $("extensions-profile");
+  clear(selector);
+  selector.appendChild(el("option", {value: "", text: "All Edge profiles"}));
+  for (const name of inventory.profiles) selector.appendChild(el("option", {value: name, text: name}));
+  selector.value = extensionProfile || "";
+  const count = inventory.extensions.length;
+  $("extensions-summary").textContent = count
+    ? `${count} extension${count === 1 ? "" : "s"} found. Reinstall Firefox versions manually; none are installed by this app.`
+    : "No user extensions found in readable local Edge data. Browser components, apps and themes are excluded.";
+  if (inventory.warnings.length) {
+    $("extensions-warnings").style.display = "";
+    $("extensions-warnings").textContent = inventory.warnings.join(" ");
+  }
+  for (const extension of inventory.extensions) {
+    const status = extension.enabled === true ? "Enabled in Edge"
+      : extension.enabled === false ? "Disabled in Edge" : "Edge enabled state unavailable";
+    const button = el("button", {class: "btn btn-soft btn-pill", text: "Find Firefox version"});
+    const resultLabel = el("div", {class: "subtle muted", text: "Needs a compatible Firefox add-on"});
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        const result = await api.open_edge_extension_search(extension.profile, extension.id);
+        resultLabel.textContent = result.ok ? "Search opened in Zen. Confirm the publisher before installing."
+          : result.error || "Zen could not be opened. Launch it once and retry.";
+      } finally { button.disabled = false; }
+    });
+    $("extensions-list").appendChild(el("div", {class: "extension-row"}, [
+      el("div", {class: "extension-info"}, [
+        el("div", {class: "name", text: extension.name}),
+        el("div", {class: "subtle muted", text: `${extension.profile} · ${extension.version} · ${status}`}),
+        resultLabel,
+      ]), button,
+    ]));
+  }
+}
 
 async function goToSourcePicker() {
   setScreen("source");
@@ -488,6 +552,7 @@ async function goToPreview() {
 }
 
 function renderPreview(p) {
+  $("preview-extensions").style.display = state.source.name === "edge" ? "" : "none";
   const warnings = $("preview-warnings");
   warnings.style.display = (p.warnings || []).length ? "" : "none";
   warnings.textContent = (p.warnings || []).join(" ");
@@ -514,7 +579,7 @@ function renderPreview(p) {
   toggles.appendChild(makeToggle("includeHistory", "Browsing history",
                                  `Copy ~${formatRows(p.historyRowsEstimate)} history rows`));
   toggles.appendChild(makeToggle("includeCookies", "Cookies & login state",
-                                 `Copy ~${formatRows(p.cookiesEstimate)} cookies (Keychain prompt)`));
+                                 `Copy ~${formatRows(p.cookiesEstimate)} cookies where supported; some sites need sign-in`));
   toggles.appendChild(makeToggle("foldersCollapsed", "Collapse folders",
                                  "Imported folders start collapsed"));
 }
