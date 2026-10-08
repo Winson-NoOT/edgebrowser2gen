@@ -187,6 +187,8 @@ class ExportData:
                         "space_name": s.space_name,
                         "tab_id": "",
                         "index": idx,
+                        "folder_path": list(t.folder_path),
+                        "parent_id": t.folder_id or "",
                     }
                     for idx, t in enumerate(s.open_tabs)
                 ],

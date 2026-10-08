@@ -103,6 +103,9 @@ class ArcExtractor(BrowserExtractor):
 
     def extract(self) -> ExportData:
         ext = ArcPinnedTabExtractor()
+        sidebar = _first_existing(_arc_storable_sidebar_paths())
+        if sidebar is not None:
+            ext.arc_sidebar_file = sidebar
         spaces = ext.extract_pinned_tabs()
         if not spaces:
             raise BrowserExtractorError(

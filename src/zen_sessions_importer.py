@@ -177,7 +177,8 @@ class ZenSessionsImporter:
         return tab
 
     def _build_open_tab(self, tab_data: dict, workspace_uuid: str,
-                         user_context_id: int, index: int) -> dict:
+                         user_context_id: int, index: int,
+                         folder_id: str | None = None) -> dict:
         """Build a non-pinned open-tab entry that lives in zen-sessions.jsonlz4.
 
         Open tabs in modern Zen are restored from this file, NOT from
@@ -191,7 +192,7 @@ class ZenSessionsImporter:
         title = tab_data.get("title", "")
         timestamp_ms = int(time.time() * 1000)
 
-        return {
+        tab = {
             "entries": [{"url": url, "title": title}],
             "lastAccessed": timestamp_ms,
             "pinned": False,
@@ -209,6 +210,10 @@ class ZenSessionsImporter:
             "attributes": {},
             "index": index,
         }
+
+        if folder_id:
+            tab["groupId"] = folder_id
+        return tab
 
     def _build_folder(self, folder_data: dict, workspace_uuid: str,
                       parent_folder_id: str | None = None) -> dict:
@@ -314,6 +319,7 @@ class ZenSessionsImporter:
                 tab_data, workspace_uuid,
                 user_context_id=user_context_id,
                 index=base_index + j + 1,
+                folder_id=arc_folder_id_to_zen_id.get(tab_data.get("parent_id", "")),
             ))
 
         # Create about:blank placeholder tab per folder - Zen requires this for validation

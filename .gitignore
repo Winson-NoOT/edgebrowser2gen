@@ -74,3 +74,8 @@ local/
 
 # Test files
 test_generic.py
+
+# Private local workspace exports and staging output
+workspace-export*.json
+.pytest_cache/
+.ruff_cache/

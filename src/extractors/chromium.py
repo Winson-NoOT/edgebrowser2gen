@@ -136,7 +136,7 @@ class ChromiumExtractor(BrowserExtractor):
         home = Path.home()
         if sys.platform == "darwin":
             paths = [home / rel for rel in self.user_data_dirs_macos]
-        elif os.name == "nt":
+        elif sys.platform == "win32":
             paths = [home / rel for rel in self.user_data_dirs_windows]
         else:
             paths = self._linux_user_data_paths(home)

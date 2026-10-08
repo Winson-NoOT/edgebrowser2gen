@@ -43,7 +43,7 @@ def launch(debug: bool = False) -> None:
     is_mac = sys.platform == "darwin"
 
     window = webview.create_window(
-        title="browser2zen",
+        title="edgebrowser2gen",
         url=entry,
         js_api=bridge,
         width=760,

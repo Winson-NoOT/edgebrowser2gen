@@ -136,7 +136,7 @@ def _zen_profiles_roots() -> list[tuple[str, Path]]:
     home = Path.home()
     if sys.platform == "darwin":
         return [("", home / "Library/Application Support/zen/Profiles")]
-    if os.name == "nt":
+    if sys.platform == "win32":
         return [("", home / "AppData/Roaming/zen/Profiles")]
     return [
         ("", home / ".zen"),
